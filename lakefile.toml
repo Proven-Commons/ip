@@ -1,0 +1,10 @@
+name = "ip"
+version = "0.1.0"
+defaultTargets = ["Ip", "ip"]
+
+[[lean_lib]]
+name = "Ip"
+
+[[lean_exe]]
+name = "ip"
+root = "Main"
