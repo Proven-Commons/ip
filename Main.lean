@@ -1,26 +1,63 @@
 /-
-  Command line front end for the IP parser first slice, used by the
-  tests. Reads one request per line and prints one answer per line.
+  Command line front end for the IP parser and printer.
 
-  A request is an operation and its input:
+  Printer commands:
+    ip print4 <b0> <b1> <b2> <b3>
+      Print the IPv4 address in dotted decimal, or `error`.
+    ip print6 <g0> ... <g7>
+      Print the IPv6 address in RFC 5952 canonical form, or `error`.
+    ip batch <file>
+      Read one printer command per line, print one result per line.
 
-    parse4 192.168.0.1      prints  ok
-    parse4 1.2.3.4.5        prints  none
-    parse6 2001:db8::1      prints  ok
-    parse6 1::2::3          prints  none
-    prefix 10.0.0.0/8       prints  ok
-    prefix 10.0.0.0/33      prints  none
-
-  The answer is `ok` when the text parses and `none` when it is
-  rejected. A malformed request prints `error`. A line may end in
-  LF or CR LF; nothing else around a request is ignored.
-
-  The parsing here calls `Ip.parseIPv4`, `Ip.parseIPv6`, and
-  `Ip.parsePrefix` directly. The line handling is covered by the
-  tests, not by a proof.
+  Parser mode:
+    ip <file>
+      Read one parser request per line and print one answer per line:
+      parse4, parse6, or prefix, answering ok, none, or error.
+      A line may end in LF or CR LF.
 -/
 
 import Ip
+
+def parseNat (s : String) : Option Nat := s.toNat?
+
+def runPrint4 (args : List String) : String :=
+  match args with
+  | [s0, s1, s2, s3] =>
+    match parseNat s0, parseNat s1, parseNat s2, parseNat s3 with
+    | some b0, some b1, some b2, some b3 =>
+      if h : b0 < 256 ∧ b1 < 256 ∧ b2 < 256 ∧ b3 < 256 then
+        printIPv4 ⟨b0, h.1, b1, h.2.1, b2, h.2.2.1, b3, h.2.2.2⟩
+      else "error"
+    | _, _, _, _ => "error"
+  | _ => "error"
+
+def runPrint6 (args : List String) : String :=
+  match args with
+  | [s0, s1, s2, s3, s4, s5, s6, s7] =>
+    match parseNat s0, parseNat s1, parseNat s2, parseNat s3,
+          parseNat s4, parseNat s5, parseNat s6, parseNat s7 with
+    | some g0, some g1, some g2, some g3,
+      some g4, some g5, some g6, some g7 =>
+      if h : g0 < 65536 ∧ g1 < 65536 ∧ g2 < 65536 ∧ g3 < 65536 ∧
+             g4 < 65536 ∧ g5 < 65536 ∧ g6 < 65536 ∧ g7 < 65536 then
+        printIPv6 ⟨g0, h.1, g1, h.2.1, g2, h.2.2.1, g3, h.2.2.2.1,
+                    g4, h.2.2.2.2.1, g5, h.2.2.2.2.2.1, g6, h.2.2.2.2.2.2.1, g7, h.2.2.2.2.2.2.2⟩
+      else "error"
+    | _, _, _, _, _, _, _, _ => "error"
+  | _ => "error"
+
+def runToks (toks : List String) : String :=
+  match toks with
+  | "print4" :: args => runPrint4 args
+  | "print6" :: args => runPrint6 args
+  | _ => "error"
+
+def runBatch (file : String) : IO UInt32 := do
+  let content ← IO.FS.readFile file
+  for line in content.splitOn "\n" do
+    let toks := (line.splitOn " ").filter (fun t => t ≠ "" ∧ t ≠ "\r")
+    if !toks.isEmpty then IO.println (runToks toks)
+  return 0
 
 def runRequest (line : String) : String :=
   match line.splitOn " " with
@@ -32,8 +69,24 @@ def runRequest (line : String) : String :=
 def stripCR (line : String) : String :=
   if line.endsWith "\r" then (line.take (line.length - 1)).toString else line
 
+def usage : IO UInt32 := do
+  IO.eprintln "usage: ip print4 <b0> <b1> <b2> <b3>"
+  IO.eprintln "       ip print6 <g0> <g1> <g2> <g3> <g4> <g5> <g6> <g7>"
+  IO.eprintln "       ip batch <file>"
+  IO.eprintln "       ip <file>   (parser requests: parse4, parse6, prefix)"
+  return 2
+
 def main (args : List String) : IO UInt32 := do
   match args with
+  | "print4" :: rest =>
+    let out := runPrint4 rest
+    IO.println out
+    return (if out = "error" then 1 else 0)
+  | "print6" :: rest =>
+    let out := runPrint6 rest
+    IO.println out
+    return (if out = "error" then 1 else 0)
+  | ["batch", file] => runBatch file
   | [file] => do
     let content ← IO.FS.readFile file
     let mut out := ""
@@ -43,6 +96,4 @@ def main (args : List String) : IO UInt32 := do
       out := out ++ runRequest line ++ "\n"
     IO.print out
     pure 0
-  | _ => do
-    IO.eprintln "usage: ip <file>"
-    pure 1
+  | _ => usage

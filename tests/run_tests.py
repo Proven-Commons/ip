@@ -1,28 +1,13 @@
 #!/usr/bin/env python3
-"""Tests for the Lean IP parser.
+"""Combined tests for the Lean IP parser and printer.
 
-Builds the `ip` executable with lake, then runs it over a request
-file and checks every answer. Requests are one per line:
-
-    parse4 192.168.0.1      -> ok
-    parse4 1.2.3.4.5        -> none
-    parse6 2001:db8::1      -> ok
-    parse6 1::2::3          -> none
-    prefix 10.0.0.0/8       -> ok
-    prefix 10.0.0.0/33      -> none
-
-A differential run against Python's `ipaddress` module, with a
-recorded seed: random valid addresses and prefixes must be accepted
-by both sides, and random text mutations must be accepted or
-rejected alike by both sides, with two named differences:
-
-- Python's `ipaddress` accepts leading zeros in IPv4 octets only
-  when the whole address is written in a form it treats as
-  unambiguous; the Lean parser rejects every leading-zero octet.
-  The oracle is set to reject them, because the spec does.
-- Python's `ipaddress` accepts IPv6 zone IDs (`fe80::1%eth0`).
-  The Lean parser rejects them, because the spec has no zone IDs.
-  The generator never feeds zone IDs as valid input.
+Parser suite: fixed cases plus a differential run against Python's
+`ipaddress` module, seed 20261026, run through the single-file
+parser mode (`ip <file>`).
+Printer suite: 32 differential cases against Python's `ipaddress`
+module, run through `ip print4` / `ip print6`.
+Both suites run, and this script writes tests/TEST-RESULTS.md
+summarising both. Exit code is 1 if either suite fails.
 """
 
 import os
@@ -189,21 +174,106 @@ def run_differential(seed=20261026):
     return errors
 
 
+
+import ipaddress
+import subprocess
+import sys
+
+# (kind, numeric parts, description)
+IPV4_CASES = [
+    ([127, 0, 0, 1], "loopback"),
+    ([0, 0, 0, 0], "all zeros"),
+    ([255, 255, 255, 255], "broadcast"),
+    ([192, 168, 1, 1], "private /24"),
+    ([10, 0, 0, 1], "private /8"),
+    ([172, 16, 0, 1], "private /12"),
+    ([8, 8, 8, 8], "public DNS"),
+    ([1, 2, 3, 4], "sequential"),
+    ([5, 5, 5, 5], "single digits (leading-zero check)"),
+    ([100, 200, 50, 25], "mixed widths"),
+    ([0, 0, 0, 1], "almost all zeros"),
+    ([255, 0, 255, 0], "alternating"),
+]
+
+# (kind, numeric groups, description)
+IPV6_CASES = [
+    ([0, 0, 0, 0, 0, 0, 0, 1], "loopback ::1"),
+    ([0, 0, 0, 0, 0, 0, 0, 0], "all zeros ::"),
+    ([0x2000, 0, 0, 0, 0, 0, 0, 1], "leading run"),
+    ([0x2000, 0, 0, 0, 0, 0, 0, 0], "trailing run"),
+    ([0x2000, 1, 0, 0, 0, 0, 0, 1], "middle run"),
+    ([1, 2, 3, 4, 5, 6, 7, 8], "no zeros, no compression"),
+    ([0xFFFF] * 8, "all ones"),
+    ([0x2000, 0, 0, 1, 0, 0, 0, 1], "two runs, longest wins"),
+    ([0, 0, 1, 0, 0, 1, 0, 0], "tie: first run wins"),
+    ([1, 0, 2, 3, 4, 5, 6, 7], "single zero, never compressed"),
+    ([0, 1, 2, 3, 4, 5, 6, 7], "single leading zero"),
+    ([1, 2, 3, 4, 5, 6, 7, 0], "single trailing zero"),
+    ([0x2000, 0, 1, 0, 0, 1, 0, 1], "run of 2 vs run of 1"),
+    ([0xFE80, 0, 0, 0, 0, 0, 0, 1], "link-local"),
+    ([0xFF02, 0, 0, 0, 0, 0, 0, 1], "multicast"),
+    ([0x2001, 0xDB8, 0, 0, 0, 0, 0, 1], "documentation range"),
+    ([0xABCD, 0xEF01, 0x2345, 0x6789, 0xABCD, 0xEF01, 0x2345, 0x6789], "mixed hex digits"),
+    ([10, 0, 0, 0, 0, 0, 0, 1], "0xa group (single hex digit)"),
+    ([0, 0, 0, 1, 0, 0, 0, 1], "leading run of 3"),
+    ([1, 0, 0, 0, 0, 0, 0, 0], "trailing run of 7"),
+]
+
+
+def run_cli(binary, args):
+    result = subprocess.run(
+        [binary] + args, capture_output=True, text=True, timeout=10
+    )
+    return result.stdout.strip(), result.returncode
+
+
+
+def run_printer_tests():
+    binary = EXE
+    failures = 0
+    total = 0
+    print("=== IPv4 differential tests ===")
+    for parts, desc in IPV4_CASES:
+        total += 1
+        expected = str(ipaddress.IPv4Address(bytes(parts)))
+        out, rc = run_cli(binary, ["print4"] + [str(p) for p in parts])
+        status = "OK" if (rc == 0 and out == expected) else "FAIL"
+        if status == "FAIL":
+            failures += 1
+        print(f"[{status}] {desc}: got {out!r}, expected {expected!r}")
+    print("\n=== IPv6 differential tests ===")
+    for groups, desc in IPV6_CASES:
+        total += 1
+        expected = str(ipaddress.IPv6Address(sum(g << (112 - 16 * i) for i, g in enumerate(groups))))
+        out, rc = run_cli(binary, ["print6"] + [str(g) for g in groups])
+        status = "OK" if (rc == 0 and out == expected) else "FAIL"
+        if status == "FAIL":
+            failures += 1
+        print(f"[{status}] {desc}: got {out!r}, expected {expected!r}")
+    print(f"\n{total - failures}/{total} printer cases passed, {failures} failed")
+    return failures, total
+
+
 def main():
-    errors = run_fixed_cases()
-    errors += run_differential()
+    parser_errors = run_fixed_cases()
+    parser_errors += run_differential()
+    printer_failures, printer_total = run_printer_tests()
     results_path = os.path.join(HERE, "TEST-RESULTS.md")
     with open(results_path, "w") as f:
         f.write("# Test results\n\n")
-        if errors:
-            f.write(f"{len(errors)} failures:\n\n")
-            for e in errors:
+        f.write("## Parser\n\n")
+        if parser_errors:
+            f.write(f"{len(parser_errors)} failures:\n\n")
+            for e in parser_errors:
                 f.write(f"- {e}\n")
         else:
-            f.write("All fixed cases and the differential run pass.\n")
-    if errors:
-        for e in errors[:20]:
+            f.write(f"All {len(CASES)} fixed cases and the differential run (seed 20261026) pass.\n")
+        f.write("\n## Printer\n\n")
+        f.write(f"{printer_total - printer_failures}/{printer_total} differential cases pass, {printer_failures} failed.\n")
+    if parser_errors:
+        for e in parser_errors[:20]:
             print("FAIL:", e, file=sys.stderr)
+    if parser_errors or printer_failures:
         return 1
     print("All tests pass.")
     return 0
