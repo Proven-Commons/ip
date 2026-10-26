@@ -1,16 +1,19 @@
 /-
-  Command line front end for the IP printer first slice.
+  Command line front end for the IP parser and printer.
 
+  Printer commands:
     ip print4 <b0> <b1> <b2> <b3>
       Print the IPv4 address in dotted decimal, or `error`.
-
     ip print6 <g0> ... <g7>
       Print the IPv6 address in RFC 5952 canonical form, or `error`.
-      Groups are decimal numbers below 65536.
-
     ip batch <file>
-      Read one command per line, print one result per line.
-      Used by the differential test harness.
+      Read one printer command per line, print one result per line.
+
+  Parser mode:
+    ip <file>
+      Read one parser request per line and print one answer per line:
+      parse4, parse6, or prefix, answering ok, none, or error.
+      A line may end in LF or CR LF.
 -/
 
 import Ip
@@ -56,10 +59,21 @@ def runBatch (file : String) : IO UInt32 := do
     if !toks.isEmpty then IO.println (runToks toks)
   return 0
 
+def runRequest (line : String) : String :=
+  match line.splitOn " " with
+  | ["parse4", s] => if (Ip.parseIPv4 s).isSome then "ok" else "none"
+  | ["parse6", s] => if (Ip.parseIPv6 s).isSome then "ok" else "none"
+  | ["prefix", s] => if (Ip.parsePrefix s).isSome then "ok" else "none"
+  | _ => "error"
+
+def stripCR (line : String) : String :=
+  if line.endsWith "\r" then (line.take (line.length - 1)).toString else line
+
 def usage : IO UInt32 := do
   IO.eprintln "usage: ip print4 <b0> <b1> <b2> <b3>"
   IO.eprintln "       ip print6 <g0> <g1> <g2> <g3> <g4> <g5> <g6> <g7>"
   IO.eprintln "       ip batch <file>"
+  IO.eprintln "       ip <file>   (parser requests: parse4, parse6, prefix)"
   return 2
 
 def main (args : List String) : IO UInt32 := do
@@ -73,4 +87,13 @@ def main (args : List String) : IO UInt32 := do
     IO.println out
     return (if out = "error" then 1 else 0)
   | ["batch", file] => runBatch file
+  | [file] => do
+    let content ← IO.FS.readFile file
+    let mut out := ""
+    for line in content.splitOn "\n" do
+      let line := stripCR line
+      if line = "" then continue
+      out := out ++ runRequest line ++ "\n"
+    IO.print out
+    pure 0
   | _ => usage

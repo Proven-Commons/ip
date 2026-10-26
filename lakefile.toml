@@ -1,9 +1,12 @@
 name = "ip"
 version = "0.1.0"
-defaultTargets = ["Ip", "ip"]
+defaultTargets = ["Ip", "Proofs", "ip"]
 
 [[lean_lib]]
 name = "Ip"
+
+[[lean_lib]]
+name = "Proofs"
 
 [[lean_exe]]
 name = "ip"
