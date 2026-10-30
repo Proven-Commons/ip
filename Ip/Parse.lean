@@ -22,13 +22,13 @@
 
   Everything is written on `List Char` with plain structural
   recursion, so the parser computes in the kernel and the proofs in
-  `Proofs` can decide concrete cases. The `String` entry points
+  `Ip.Proofs` can decide concrete cases. The `String` entry points
   only convert with `toList`. In particular this file never uses
   `String.splitOn`, which does not reduce in the kernel.
 
   The parsers are split into a shape step (split the text and match
   on the exact part count) and a validation step, so the proofs in
-  `Proofs` can case on the shape. `parseIPv4Parts` and friends
+  `Ip.Proofs` can case on the shape. `parseIPv4Parts` and friends
   take already-split parts; `parseIPv4` and friends split first.
 -/
 
